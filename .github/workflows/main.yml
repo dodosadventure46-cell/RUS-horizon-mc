@@ -1,4 +1,4 @@
-name: Build Horizon Android Zalith 2 APK (Tanpa Ekstrak)
+name: Build Horizon Android Zalith 2 APK (Tanpa Ekstrak & Anti-Gagal SDK/NDK)
 
 on:
   push:
@@ -18,8 +18,12 @@ jobs:
   build-zalith2-apk:
     name: Build APK Horizon Zalith 2 (Horizon-Zalith2-Edition)
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     permissions:
       contents: write
+    env:
+      HORIZON_TELEMETRY_URL: "off"
+      CARGO_BUILD_JOBS: "2"
     steps:
       - name: 1. Checkout Repository Pengguna
         uses: actions/checkout@v4
@@ -28,102 +32,219 @@ jobs:
 
       - name: 2. Siapkan Source Code Vasysik/horizon-android (Otomatis)
         run: |
-          if [ -f "user-repo/tools/android_build.py" ]; then
+          mkdir -p /tmp/zalith-zips
+          find user-repo -maxdepth 2 -name "*.zip" -exec cp {} /tmp/zalith-zips/ \; || true
+          if [ -f "user-repo/tools/android_build.py" ] && [ -f "user-repo/research-lock.json" ]; then
             echo "Repo sudah berupa fork Vasysik/horizon-android."
-            cp -r user-repo/. workdir/
+            cp -a user-repo/. workdir/
           else
             echo "Mengambil source code terbaru dari Vasysik/horizon-android (branch android)..."
             git clone --depth 1 -b android https://github.com/Vasysik/horizon-android.git workdir
-            # Salin file .zip jika pengguna mengunggah file .zip mentah ke repo (tanpa ekstrak)
-            find user-repo -maxdepth 2 -name "*.zip" -exec cp {} workdir/ \;
           fi
 
-      - name: 3. Otomatis Ekstrak ZIP / Download dari Google Drive / Injeksi Tema Zalith 2
+      - name: 3. Ekstrak Konfigurasi ZIP / Google Drive & Injeksi Tema Zalith 2
         working-directory: workdir
         env:
           GDRIVE_INPUT: ${{ github.event.inputs.gdrive_file_id }}
           ACCENT_HEX: ${{ github.event.inputs.accent_hex || '0x10B981' }}
         run: |
-          # A. Jika pengguna memasukkan Link / ID Google Drive, unduh otomatis di server GitHub:
+          mkdir -p /tmp/zalith-extract
+          # A. Jika pengguna memasukkan Link / ID Google Drive, unduh otomatis:
           if [ -n "$GDRIVE_INPUT" ]; then
             FILE_ID=$(echo "$GDRIVE_INPUT" | sed -n 's/.*[-/]\([0-9A-Za-z_-]\{25,\}\).*/\1/p')
             if [ -z "$FILE_ID" ]; then FILE_ID="$GDRIVE_INPUT"; fi
             echo "Mengunduh paket ZIP dari Google Drive ID: $FILE_ID ..."
-            curl -L "https://drive.google.com/uc?export=download&id=${FILE_ID}" -o gdrive-zalith2.zip || true
+            curl -sL "https://drive.google.com/uc?export=download&id=${FILE_ID}" -o /tmp/zalith-zips/gdrive-zalith2.zip || true
           fi
 
-          # B. Jika ada file .zip mentah di dalam repo (tanpa perlu ekstrak manual di HP), ekstrak otomatis:
+          # B. Jika ada file .zip di repo atau dari GDrive, ekstrak konfigurasi secara aman di /tmp (tanpa menimpa file Rust asli):
           shopt -s nullglob
-          ZIP_FILES=(*.zip)
-          if [ ${#ZIP_FILES[@]} -gt 0 ]; then
-            for zf in "${ZIP_FILES[@]}"; do
-              echo "Menemukan file ZIP mentah: $zf -> Mengekstrak otomatis di server..."
-              unzip -o "$zf" -d . || true
-              rm -f "$zf"
-            done
-          fi
+          for zf in /tmp/zalith-zips/*.zip; do
+            echo "Mengekstrak konfigurasi dari: $zf ..."
+            unzip -q -o "$zf" -d /tmp/zalith-extract || true
+          done
 
-          # C. Injeksi Langsung Tema Zalith 2 (Zalith Emerald) ke Source Code Rust:
+          # C. Injeksi Tema Zalith 2 (Zalith Emerald) & Patch Keamanan SDK/NDK ke Source Code Rust:
           python3 - << 'PYEOF'
           import os, pathlib, re
 
-          accent_hex = os.environ.get("ACCENT_HEX", "0x10B981")
-          on_accent_hex = "0x052E16"
+          accent_hex = os.environ.get("ACCENT_HEX", "0x10B981").strip()
+          if not re.match(r"^0x[0-9a-fA-F]{6}$", accent_hex):
+              cleaned = accent_hex.lstrip("#").lstrip("0x")
+              accent_hex = f"0x{cleaned.upper()}" if re.match(r"^[0-9a-fA-F]{6}$", cleaned) else "0x10B981"
+
+          # Baca horizon.txt jika diekstrak dari ZIP pengguna
+          htxt = pathlib.Path("/tmp/zalith-extract/horizon.txt")
+          if htxt.exists():
+              for line in htxt.read_text(encoding="utf-8", errors="ignore").splitlines():
+                  if line.startswith("zalith_accent_hex:"):
+                      hval = line.split(":", 1)[1].strip().lstrip("#")
+                      if re.match(r"^[0-9a-fA-F]{6}$", hval):
+                          accent_hex = f"0x{hval.upper()}"
 
           # 1. Patch crates/horizon-theme/src/lib.rs (Accent & Corner Radius Zalith 2)
           theme_lib = pathlib.Path("crates/horizon-theme/src/lib.rs")
           if theme_lib.exists():
               txt = theme_lib.read_text(encoding="utf-8")
-              txt = re.sub(r"pub const RADIUS:s*f32s*=s*[0-9.]+;", "pub const RADIUS: f32 = 16.0;", txt)
-              txt = re.sub(r"pub const RADIUS_PLATE:s*f32s*=s*[0-9.]+;", "pub const RADIUS_PLATE: f32 = 12.0;", txt)
-              txt = re.sub(r"accent:s*0x[0-9A-Fa-f_]+", f"accent: {accent_hex}", txt)
+              txt = re.sub(r"pub const RADIUS:\s*f32\s*=\s*[0-9.]+;", "pub const RADIUS: f32 = 16.;", txt)
+              txt = re.sub(r"pub const RADIUS_PLATE:\s*f32\s*=\s*[0-9.]+;", "pub const RADIUS_PLATE: f32 = 12.;", txt)
+              txt = re.sub(
+                  r"(pub const DARK:\s*Palette\s*=\s*Palette\s*\{[\s\S]*?accent:\s*)0x[0-9a-fA-F_]+",
+                  rf"\g<1>{accent_hex}",
+                  txt,
+                  count=1,
+              )
               theme_lib.write_text(txt, encoding="utf-8")
-              print("Berhasil memodifikasi crates/horizon-theme/src/lib.rs")
+              print(f"Berhasil memodifikasi crates/horizon-theme/src/lib.rs (accent={accent_hex})")
 
           # 2. Patch crates/horizon-client/src/ui_theme.rs (Zalith 2 Translucent Glass & Custom Background Scrim)
           ui_theme = pathlib.Path("crates/horizon-client/src/ui_theme.rs")
           if ui_theme.exists():
               txt = ui_theme.read_text(encoding="utf-8")
               txt = re.sub(
-                  r"pub const BG:s*u32s*=s*hex(P.page,s*255);",
+                  r"pub const BG:\s*u32\s*=\s*hex\(P\.page,\s*[0-9]+\);",
                   "pub const BG: u32 = hex(P.page, 148);",
                   txt,
               )
               txt = re.sub(
-                  r"pub const RAISED:s*u32s*=s*hex(P.ink,s*[0-9]+);",
+                  r"pub const RAISED:\s*u32\s*=\s*hex\(P\.ink,\s*[0-9]+\);",
                   "pub const RAISED: u32 = hex(P.ink, 63);",
                   txt,
               )
               ui_theme.write_text(txt, encoding="utf-8")
               print("Berhasil memodifikasi crates/horizon-client/src/ui_theme.rs")
+
+          # 3. Patch crates/horizon-client/src/android/launcher_pages.rs (Zalith 2 Rounded Buttons & Header)
+          launcher_pages = pathlib.Path("crates/horizon-client/src/android/launcher_pages.rs")
+          if launcher_pages.exists():
+              txt = launcher_pages.read_text(encoding="utf-8")
+              txt = txt.replace(
+                  "        2.0,\n        if accent { color::ACCENT } else { color::RAISED },",
+                  "        14.0,\n        if accent { color::ACCENT } else { color::RAISED },",
+              )
+              txt = txt.replace('"Horizon Android {}"', '"Horizon Zalith 2 · {}"')
+              launcher_pages.write_text(txt, encoding="utf-8")
+              print("Berhasil memodifikasi crates/horizon-client/src/android/launcher_pages.rs")
+
+          # 4. Patch tools/android_build.py agar fungsi latest() tidak pernah crash jika ada folder non-angka di SDK/NDK
+          ab = pathlib.Path("tools/android_build.py")
+          if ab.exists():
+              txt = ab.read_text(encoding="utf-8")
+              old_latest = "def latest(directory):\n    return max(directory.iterdir(), key=lambda p: tuple(int(v) for v in p.name.split('.')))"
+              new_latest = (
+                  "def latest(directory):\n"
+                  "    valid = [p for p in directory.iterdir() if p.is_dir() and all(v.isdigit() for v in p.name.split('.'))]\n"
+                  "    return max(valid, key=lambda p: tuple(int(v) for v in p.name.split('.')))"
+              )
+              if old_latest in txt:
+                  txt = txt.replace(old_latest, new_latest)
+                  ab.write_text(txt, encoding="utf-8")
+                  print("Berhasil mengamankan pendeteksi versi SDK/NDK di tools/android_build.py")
           PYEOF
 
-      - name: 4. Set up Python 3.12 & JDK 17
+      - name: 4. Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: 5. Set up Android SDK & NDK
-        uses: android-actions/setup-android@v3
+      - name: 5. Set up Android SDK, NDK 28.2.13676358, Build-Tools 35.0.0 & Gradle 8.14
+        run: |
+          set -e
+          # Gunakan Android SDK bawaan ubuntu-latest (tanpa android-actions/setup-android yang sering error)
+          SDK_DIR="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          mkdir -p "$SDK_DIR"
+          echo "ANDROID_HOME=$SDK_DIR" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_DIR" >> "$GITHUB_ENV"
 
-      - name: 6. Install Rust Toolchain (aarch64-linux-android)
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android
+          # Cari binary sdkmanager bawaan runner GitHub
+          SDKMGR="$SDK_DIR/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMGR" ]; then
+            SDKMGR=$(command -v sdkmanager || find "$SDK_DIR" -name sdkmanager -type f 2>/dev/null | head -n 1 || true)
+          fi
+          if [ -z "$SDKMGR" ] || [ ! -x "$SDKMGR" ]; then
+            echo "Mengunduh Android commandlinetools..."
+            curl -sL https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o /tmp/cmdtools.zip
+            mkdir -p "$SDK_DIR/cmdline-tools"
+            unzip -q -o /tmp/cmdtools.zip -d "$SDK_DIR/cmdline-tools"
+            mv "$SDK_DIR/cmdline-tools/cmdline-tools" "$SDK_DIR/cmdline-tools/latest"
+            SDKMGR="$SDK_DIR/cmdline-tools/latest/bin/sdkmanager"
+          fi
 
-      - name: 7. Compile Native Rust Engine & Build APK (arm64-v8a)
+          echo "Menggunakan sdkmanager: $SDKMGR"
+          yes | "$SDKMGR" --sdk_root="$SDK_DIR" --licenses >/dev/null 2>&1 || true
+          "$SDKMGR" --sdk_root="$SDK_DIR" --install "platforms;android-35" "build-tools;35.0.0" "ndk;28.2.13676358"
+
+          # Pastikan hanya NDK 28.2.13676358 dan Build-Tools 35.0.0 yang dipilih oleh tools/android_build.py
+          find "$SDK_DIR/ndk" -mindepth 1 -maxdepth 1 ! -name "28.2.13676358" -exec rm -rf {} + 2>/dev/null || true
+          find "$SDK_DIR/build-tools" -mindepth 1 -maxdepth 1 ! -name "35.0.0" -exec rm -rf {} + 2>/dev/null || true
+
+          # Siapkan Gradle 8.14 (diwajibkan oleh tools/android_build.py)
+          if [ ! -x "/tmp/gradle-8.14/bin/gradle" ]; then
+            echo "Mengunduh Gradle 8.14..."
+            curl -sL https://services.gradle.org/distributions/gradle-8.14-bin.zip -o /tmp/gradle-8.14.zip
+            unzip -q -o /tmp/gradle-8.14.zip -d /tmp
+          fi
+          echo "GRADLE_BIN=/tmp/gradle-8.14/bin/gradle" >> "$GITHUB_ENV"
+
+      - name: 6. Install Rust Toolchain Sesuai rust-toolchain.toml (aarch64-linux-android)
         working-directory: workdir
         run: |
-          # Bersihkan file sementara sebelum audit public tree
-          rm -rf user-repo *.zip gdrive-zalith2.zip
+          TOOLCHAIN=$(python3 -c 'import tomllib, pathlib; p=pathlib.Path("rust-toolchain.toml"); print(tomllib.loads(p.read_text())["toolchain"]["channel"] if p.exists() else "stable")')
+          echo "Menginstal Rust Toolchain: $TOOLCHAIN (target: aarch64-linux-android)"
+          rustup toolchain install "$TOOLCHAIN" --profile minimal --no-self-update
+          rustup default "$TOOLCHAIN"
+          rustup target add aarch64-linux-android --toolchain "$TOOLCHAIN"
+
+      - name: 7. Siapkan Engine Tables & Compile APK (arm64-v8a)
+        working-directory: workdir
+        run: |
+          set -e
+          # Bersihkan file yang tidak terlacak agar git tree bersih
           git checkout -- .github 2>/dev/null || true
-          python3 tools/android_build.py --abi arm64-v8a --public
+          git clean -fd
+
+          # Siapkan tabel mesin (engine-data.zip) untuk Minecraft versi yang di-pin di research-lock.json
+          python3 - << 'PYEOF'
+          import json, pathlib, subprocess, urllib.request, zipfile
+
+          root = pathlib.Path(".")
+          version = json.loads((root / "research-lock.json").read_text(encoding="utf-8"))["minecraft"]["version"]
+          dest = root / ".local/horizon-client" / version
+          dest.mkdir(parents=True, exist_ok=True)
+
+          # Jalur cepat (2 detik): ambil generated engine tables resmi dari rilis publik Vasysik/horizon-android
+          release_url = "https://github.com/Vasysik/horizon-android/releases/download/v0.7.6/Horizon-Android-0.7.6-arm64-v8a.apk"
+          ref_apk = pathlib.Path("/tmp/horizon-ref.apk")
+          try:
+              print(f"Mengambil tabel mesin (engine-data.zip) untuk Minecraft {version}...")
+              urllib.request.urlretrieve(release_url, ref_apk)
+              with zipfile.ZipFile(ref_apk) as apk:
+                  with zipfile.ZipFile(apk.open("assets/engine-data.zip")) as ed:
+                      ed.extractall(dest)
+              print("Berhasil menyiapkan generated engine tables di", dest)
+          except Exception as e:
+              print("Fallback ke tools/android_prepare.py:", e)
+              subprocess.run(["python3", "tools/android_prepare.py"], check=True)
+          PYEOF
+
+          # Jalankan build resmi Horizon Android dengan path SDK, JAVA_HOME, dan Gradle 8.14 eksplisit
+          python3 tools/android_build.py \
+            --abi arm64-v8a \
+            --public \
+            --sdk "$ANDROID_HOME" \
+            --java-home "$JAVA_HOME" \
+            --gradle "$GRADLE_BIN"
+
+          mkdir -p dist-apk
+          cp -v .local/android/apk/arm64-v8a/horizon-android-public.apk "dist-apk/Horizon-Zalith2-Edition-arm64-v8a.apk"
 
       - name: 8. Upload File APK Siap Install (Direct Download di Artifacts)
         uses: actions/upload-artifact@v4
         with:
           name: Horizon-Zalith2-Edition-arm64-v8a-APK
           path: |
-            workdir/**/*.apk
+            workdir/dist-apk/*.apk
+            workdir/.local/android/apk/arm64-v8a/*.apk
+          if-no-files-found: error
           retention-days: 30
