@@ -1,4 +1,4 @@
-name: Build Horizon Android Zalith 2 Plus v2.0 APK (Real-Time Stats, Custom BG Image/Video, UI Scale, Java Shaders, .hnmod & Ely.by)
+name: Build Horizon Android Zalith 2 Plus v2.2 APK (Anti-Truncate & Zero PYEOF)
 
 on:
   push:
@@ -24,7 +24,7 @@ on:
 
 jobs:
   build-zalith2-apk:
-    name: Build APK ZalithLauncher 2 Plus v2.0 (ZalithLauncher-2-Plus-Horizon)
+    name: Build APK ZalithLauncher 2 Plus v2.2 (ZalithLauncher-2-Plus-Horizon)
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
@@ -40,18 +40,16 @@ jobs:
 
       - name: 2. Siapkan Source Code Vasysik/horizon-android (Otomatis)
         run: |
-          mkdir -p /tmp/zalith-zips /tmp/zalith-hnmods /tmp/zalith-shaders /tmp/zalith-backgrounds
+          mkdir -p /tmp/zalith-zips /tmp/zalith-hnmods
           find user-repo -maxdepth 3 -name "*.zip" -exec cp {} /tmp/zalith-zips/ \; || true
           find user-repo -maxdepth 3 -name "*.hnmod" -exec cp {} /tmp/zalith-hnmods/ \; || true
           if [ -f "user-repo/tools/android_build.py" ] && [ -f "user-repo/research-lock.json" ]; then
-            echo "Repo sudah berupa fork Vasysik/horizon-android."
             cp -a user-repo/. workdir/
           else
-            echo "Mengambil source code terbaru dari Vasysik/horizon-android (branch android)..."
             git clone --depth 1 -b android https://github.com/Vasysik/horizon-android.git workdir
           fi
 
-      - name: 3. Injeksi 7 Fitur ZalithLauncher 2 Plus v2.0 (UI Glow, Real-Time Stats, Custom BG Image/Video, UI Scale, Java Shaders, Pre-Baked .hnmod & Ely.by)
+      - name: 3. Injeksi 7 Fitur ZalithLauncher 2 Plus v2.2 dari Paket ZIP
         working-directory: workdir
         env:
           GDRIVE_INPUT: ${{ github.event.inputs.gdrive_file_id }}
@@ -59,316 +57,82 @@ jobs:
           DEFAULT_UI_SCALE: ${{ github.event.inputs.ui_scale_pct || '100' }}
           DEFAULT_ELY_USER: ${{ github.event.inputs.ely_default_user || 'dodo' }}
         run: |
-          mkdir -p /tmp/zalith-extract
-          # A. Jika pengguna memasukkan Link / ID Google Drive, unduh otomatis:
+          mkdir -p /tmp/zalith-extract mixins
           if [ -n "$GDRIVE_INPUT" ]; then
             FILE_ID=$(echo "$GDRIVE_INPUT" | sed -n 's/.*[-/]\([0-9A-Za-z_-]\{25,\}\).*/\1/p')
             if [ -z "$FILE_ID" ]; then FILE_ID="$GDRIVE_INPUT"; fi
-            echo "Mengunduh paket ZIP dari Google Drive ID: $FILE_ID ..."
             curl -sL "https://drive.google.com/uc?export=download&id=${FILE_ID}" -o /tmp/zalith-zips/gdrive-zalith2.zip || true
           fi
-
-          # B. Ekstrak konfigurasi ZIP di /tmp:
           shopt -s nullglob
           for zf in /tmp/zalith-zips/*.zip; do
             echo "Mengekstrak konfigurasi dari: $zf ..."
             unzip -q -o "$zf" -d /tmp/zalith-extract || true
           done
           find /tmp/zalith-extract -name "*.hnmod" -exec cp {} /tmp/zalith-hnmods/ \; 2>/dev/null || true
-
-          # C. Ekstrak semua bundel .hnmod ke workdir/mixins/ & siapkan Pre-Baked Native Hooks:
-          mkdir -p mixins
           for hnm in /tmp/zalith-hnmods/*.hnmod; do
-            echo "Mengekstrak native mixin dari mod .hnmod: $hnm ..."
             unzip -q -o "$hnm" "mixins/*" -d . 2>/dev/null || true
           done
+          python3 /tmp/zalith-extract/zalith_patcher.py
 
-          # D. Jalankan Patcher Python untuk ke-7 fitur utama tanpa memperlambat Instant Launch:
-          if [ -f "/tmp/zalith-extract/zalith_patcher.py" ]; then
-            echo "Menjalankan zalith_patcher.py langsung dari dalam paket ZIP..."
-            python3 /tmp/zalith-extract/zalith_patcher.py
-          else
-          python3 - << 'PYEOF'
-          import json, os, pathlib, re
+      - name: 4. Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
 
-          accent_hex = os.environ.get("ACCENT_HEX", "0xA8C7FA").strip()
-          if not re.match(r"^0x[0-9a-fA-F]{6}$", accent_hex):
-              cleaned = accent_hex.lstrip("#").lstrip("0x")
-              accent_hex = f"0x{cleaned.upper()}" if re.match(r"^[0-9a-fA-F]{6}$", cleaned) else "0xA8C7FA"
+      - name: 5. Set up Android SDK, NDK 28.2.13676358, Build-Tools 35.0.0 & Gradle 8.14
+        run: |
+          set -e
+          SDK_DIR="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          mkdir -p "$SDK_DIR"
+          echo "ANDROID_HOME=$SDK_DIR" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_DIR" >> "$GITHUB_ENV"
+          SDKMGR="$SDK_DIR/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMGR" ]; then
+            SDKMGR=$(command -v sdkmanager || find "$SDK_DIR" -name sdkmanager -type f 2>/dev/null | head -n 1 || true)
+          fi
+          if [ -z "$SDKMGR" ] || [ ! -x "$SDKMGR" ]; then
+            curl -sL https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o /tmp/cmdtools.zip
+            mkdir -p "$SDK_DIR/cmdline-tools"
+            unzip -q -o /tmp/cmdtools.zip -d "$SDK_DIR/cmdline-tools"
+            mv "$SDK_DIR/cmdline-tools/cmdline-tools" "$SDK_DIR/cmdline-tools/latest"
+            SDKMGR="$SDK_DIR/cmdline-tools/latest/bin/sdkmanager"
+          fi
+          yes | "$SDKMGR" --sdk_root="$SDK_DIR" --licenses >/dev/null 2>&1 || true
+          "$SDKMGR" --sdk_root="$SDK_DIR" --install "platforms;android-35" "build-tools;35.0.0" "ndk;28.2.13676358"
+          find "$SDK_DIR/ndk" -mindepth 1 -maxdepth 1 ! -name "28.2.13676358" -exec rm -rf {} + 2>/dev/null || true
+          find "$SDK_DIR/build-tools" -mindepth 1 -maxdepth 1 ! -name "35.0.0" -exec rm -rf {} + 2>/dev/null || true
+          if [ ! -x "/tmp/gradle-8.14/bin/gradle" ]; then
+            curl -sL https://services.gradle.org/distributions/gradle-8.14-bin.zip -o /tmp/gradle-8.14.zip
+            unzip -q -o /tmp/gradle-8.14.zip -d /tmp
+          fi
+          echo "GRADLE_BIN=/tmp/gradle-8.14/bin/gradle" >> "$GITHUB_ENV"
 
-          default_ui_scale = os.environ.get("DEFAULT_UI_SCALE", "100").strip()
-          if not default_ui_scale.isdigit():
-              default_ui_scale = "100"
+      - name: 6. Install Rust Toolchain Sesuai rust-toolchain.toml (aarch64-linux-android)
+        working-directory: workdir
+        run: |
+          TOOLCHAIN=$(python3 -c 'import tomllib, pathlib; p=pathlib.Path("rust-toolchain.toml"); print(tomllib.loads(p.read_text())["toolchain"]["channel"] if p.exists() else "stable")')
+          rustup toolchain install "$TOOLCHAIN" --profile minimal --no-self-update
+          rustup default "$TOOLCHAIN"
+          rustup target add aarch64-linux-android --toolchain "$TOOLCHAIN"
 
-          default_user = os.environ.get("DEFAULT_ELY_USER", "dodo").strip() or "dodo"
+      - name: 7. Siapkan Engine Tables (Instant Launch) & Compile APK (arm64-v8a)
+        working-directory: workdir
+        run: |
+          set -e
+          git checkout -- .github 2>/dev/null || true
+          git clean -fd -e mixins || true
+          python3 -c 'import json,pathlib,urllib.request,zipfile; r=pathlib.Path("."); v=json.loads((r/"research-lock.json").read_text())["minecraft"]["version"]; d=r/".local/horizon-client"/v; d.mkdir(parents=True,exist_ok=True); urllib.request.urlretrieve("https://github.com/Vasysik/horizon-android/releases/download/v0.7.6/Horizon-Android-0.7.6-arm64-v8a.apk","/tmp/ref.apk"); zipfile.ZipFile(zipfile.ZipFile("/tmp/ref.apk").open("assets/engine-data.zip")).extractall(d); print("Engine tables ready:",d)' || python3 tools/android_prepare.py
+          python3 tools/android_build.py --abi arm64-v8a --public --sdk "$ANDROID_HOME" --java-home "$JAVA_HOME" --gradle "$GRADLE_BIN"
+          mkdir -p dist-apk
+          cp -v .local/android/apk/arm64-v8a/horizon-android-public.apk "dist-apk/ZalithLauncher-2-Plus-Horizon-arm64-v8a.apk"
 
-          htxt = pathlib.Path("/tmp/zalith-extract/horizon.txt")
-          if htxt.exists():
-              for line in htxt.read_text(encoding="utf-8", errors="ignore").splitlines():
-                  if line.startswith("zalith_accent_hex:"):
-                      hval = line.split(":", 1)[1].strip().lstrip("#")
-                      if re.match(r"^[0-9a-fA-F]{6}$", hval):
-                          accent_hex = f"0x{hval.upper()}"
-                  elif line.startswith("zalith_ui_scale_pct:"):
-                      sval = line.split(":", 1)[1].strip()
-                      if sval.isdigit():
-                          default_ui_scale = sval
-                  elif line.startswith("ely_username:") or line.startswith("account_active_user:"):
-                      uval = line.split(":", 1)[1].strip()
-                      if uval:
-                          default_user = uval
-
-          # 1. Patch crates/horizon-theme/src/lib.rs (Accent & Corner Radius ZalithLauncher 2 Plus v2.0)
-          theme_lib = pathlib.Path("crates/horizon-theme/src/lib.rs")
-          if theme_lib.exists():
-              txt = theme_lib.read_text(encoding="utf-8")
-              txt = re.sub(r"pub const RADIUS:\s*f32\s*=\s*[0-9.]+;", "pub const RADIUS: f32 = 24.;", txt)
-              txt = re.sub(r"pub const RADIUS_PLATE:\s*f32\s*=\s*[0-9.]+;", "pub const RADIUS_PLATE: f32 = 20.;", txt)
-              txt = re.sub(
-                  r"(pub const DARK:\s*Palette\s*=\s*Palette\s*\{[\s\S]*?accent:\s*)0x[0-9a-fA-F_]+",
-                  rf"\g<1>{accent_hex}",
-                  txt,
-                  count=1,
-              )
-              theme_lib.write_text(txt, encoding="utf-8")
-              print(f"[1/7] Berhasil memodifikasi crates/horizon-theme/src/lib.rs (accent={accent_hex})")
-
-          # 2. Patch crates/horizon-client/src/ui_theme.rs (Double-Layer Glass, Scrim & Helper Preference)
-          ui_theme = pathlib.Path("crates/horizon-client/src/ui_theme.rs")
-          if ui_theme.exists():
-              txt = ui_theme.read_text(encoding="utf-8")
-              txt = re.sub(
-                  r"pub const BG:\s*u32\s*=\s*hex\(P\.page,\s*[0-9]+\);",
-                  "pub const BG: u32 = hex(P.page, 82);",
-                  txt,
-              )
-              txt = re.sub(
-                  r"pub const RAISED:\s*u32\s*=\s*hex\(P\.ink,\s*[0-9]+\);",
-                  "pub const RAISED: u32 = hex(P.ink, 86);",
-                  txt,
-              )
-              ui_theme.write_text(txt, encoding="utf-8")
-              print("[2/7] Berhasil memodifikasi crates/horizon-client/src/ui_theme.rs")
-
-          # 3. Patch crates/horizon-client/src/android/launcher_pages.rs
-          #    Menambahkan:
-          #    - Double-Layer Glass + Glow Frame Bento Grid
-          #    - Statistik & Grafik 7 Hari Real-Time mengikuti jam/tanggal HP pengguna (SystemTime) + Rank Otomatis
-          #    - Kontrol Interaktif Ukuran UI (UI Scale 85% - 120% via tap tombol Profile/Scale maupun horizon.txt)
-          #    - Kontrol Custom Background (Gambar & Video + Dimming + Auto-Pause saat Launch)
-          #    - Kontrol Login Akun Ely.by / Microsoft / Offline + Sinkronisasi Skin Ely.by
-          #    - Status Mod .hnmod/.hmod & Java Shader (.zip GLSL -> WGSL Bridge)
-          launcher_pages = pathlib.Path("crates/horizon-client/src/android/launcher_pages.rs")
-          if launcher_pages.exists():
-              txt = launcher_pages.read_text(encoding="utf-8")
-              nl = chr(10)
-              old_btn = "        2.0," + nl + "        if accent { color::ACCENT } else { color::RAISED },"
-              new_btn = "        18.0," + nl + "        if accent { color::ACCENT } else { color::RAISED },"
-              txt = txt.replace(old_btn, new_btn)
-              txt = txt.replace('"Horizon Android {}"', '"ZalithLauncher 2 Plus v2 · {}"')
-              txt = txt.replace('"Search / .hmod URL: "', '"Search / .hnmod, .hmod or Java Shader .zip URL: "')
-              txt = txt.replace('"Import .hmod"', '"Import .hnmod / .hmod / BG Media"')
-
-              # Deteksi varian Page yang tersedia agar 100% bebas error kompilasi di semua revisi Vasysik/horizon-android
-              card3_action = "Action::Page(Page::Settings)" if "Page::Settings" in txt else "Action::Page(Page::Installed)"
-
-              start_marker = "        if page == Page::Play {"
-              end_marker = "        } else if page.is_catalog() {"
-              if start_marker in txt and end_marker in txt:
-                  before, rest = txt.split(start_marker, 1)
-                  _, after = rest.split(end_marker, 1)
-                  play_lines = [
-                      '        if page == Page::Play {',
-                      '            use horizon_client::official_install::InstallStage;',
-                      '            use std::time::{SystemTime, UNIX_EPOCH};',
-                      '            let installed = horizon_client::official_install::ready(&self.home);',
-                      '            let installing = self.worker.is_some();',
-                      '            let progress = *self.install.lock().unwrap();',
-                      '',
-                      '            // Baca konfigurasi ringan dari horizon.txt (UI Scale, Custom BG, Ely.by, Shaders)',
-                      '            let htxt_path = self.home.join("horizon.txt");',
-                      '            let htxt_raw = std::fs::read_to_string(&htxt_path).unwrap_or_default();',
-                      '            let read_pref = |key: &str, def: &str| -> String {',
-                      '                htxt_raw.lines().find_map(|l| {',
-                      '                    let (k, v) = l.split_once(\':\')?;',
-                      '                    (k.trim() == key).then(|| v.trim().to_owned())',
-                      '                }).unwrap_or_else(|| def.to_owned())',
-                      '            };',
-                      f'            let base_scale: f32 = read_pref("zalith_ui_scale_pct", "{default_ui_scale}").parse::<f32>().unwrap_or(100.0).clamp(75.0, 125.0);',
-                      '            let scale_presets: [f32; 5] = [base_scale, 110.0, 120.0, 85.0, 95.0];',
-                      '            let ui_scale_pct: f32 = scale_presets[(self.catalog.config.profile as usize) % 5].clamp(75.0, 125.0);',
-                      '            let ui_s: f32 = ui_scale_pct / 100.0;',
-                      '            let bg_media = read_pref("zalith_bg_media", "Default Glass");',
-                      '            let bg_type = read_pref("zalith_bg_type", "image");',
-                      '            let bg_dim: u8 = read_pref("zalith_bg_dim_pct", "32").parse::<u8>().unwrap_or(32).clamp(10, 85);',
-                      '            let acc_type = read_pref("account_active_type", "elyby");',
-                      f'            let ely_user = read_pref("ely_username", "{default_user}");',
-                      '            let tz_offset_h: i64 = read_pref("zalith_timezone_offset_hours", "8").parse::<i64>().unwrap_or(8);',
-                      '',
-                      '            // Render Custom Background Scrim (Image / Video Loop aktif di menu, otomatis pause 0ms saat masuk game)',
-                      '            let scrim_alpha = ((bg_dim as u32) * 255 / 100).clamp(20, 220);',
-                      '            ui.rounded(0.0, 0.0, w, h, 0.0, (scrim_alpha << 24) | 0x00090D16);',
-                      '            if bg_media != "none" && bg_media != "Default Glass" {',
-                      '                let bg_badge = if bg_type == "video" { "VIDEO BG LOOP (Auto-Pause In-Game)" } else { "CUSTOM IMAGE BG" };',
-                      '                ui.text(Face::Regular, (10.0 * ui_s).clamp(9.0, 13.0), 54.0, 118.0, 0xFF34D399, bg_badge);',
-                      '            }',
-                      '',
-                      '            // Hitung Waktu & Kalender 7 Hari Real-Time sesuai jam perangkat pengguna',
-                      '            let now_secs = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(1793608800);',
-                      '            let local_secs = (now_secs + tz_offset_h * 3600).max(0) as u64;',
-                      '            let today_idx = local_secs / 86400;',
-                      '            let hour_of_day = (local_secs % 86400) / 3600;',
-                      '            let min_of_day = (local_secs % 3600) / 60;',
-                      '            let weekday_names = ["Kam", "Jum", "Sab", "Min", "Sen", "Sel", "Rab"];',
-                      '',
-                      '            // Baca & akumulasikan statistik durasi bermain nyata di zalith_playtime.txt',
-                      '            let stats_path = self.home.join("zalith_playtime.txt");',
-                      '            let stats_raw = std::fs::read_to_string(&stats_path).unwrap_or_default();',
-                      '            let mut day_minutes: [u32; 7] = [0; 7];',
-                      '            let mut total_mins: u32 = 0;',
-                      '            let mut last_ping_sec: u64 = 0;',
-                      '            for line in stats_raw.lines() {',
-                      '                if let Some((k, v)) = line.split_once(\':\') {',
-                      '                    if k == "last_ping" {',
-                      '                        last_ping_sec = v.parse::<u64>().unwrap_or(0);',
-                      '                    } else if let (Ok(d_id), Ok(mins)) = (k.parse::<u64>(), v.parse::<u32>()) {',
-                      '                        total_mins = total_mins.saturating_add(mins);',
-                      '                        if today_idx >= d_id && (today_idx - d_id) < 7 {',
-                      '                            let slot = 6 - (today_idx - d_id) as usize;',
-                      '                            day_minutes[slot] = mins;',
-                      '                        }',
-                      '                    }',
-                      '                }',
-                      '            }',
-                      '            if local_secs.saturating_sub(last_ping_sec) >= 60 {',
-                      '                day_minutes[6] = day_minutes[6].saturating_add(1);',
-                      '                total_mins = total_mins.saturating_add(1);',
-                      '                let mut out_s = format!("last_ping:{local_secs}\\n");',
-                      '                for idx in 0..7 {',
-                      '                    let d_key = today_idx.saturating_sub((6 - idx) as u64);',
-                      '                    out_s.push_str(&format!("{d_key}:{}\\n", day_minutes[idx]));',
-                      '                }',
-                      '                let _ = std::fs::write(&stats_path, out_s);',
-                      '            }',
-                      '            let today_h = (day_minutes[6] as f32) / 60.0;',
-                      '            let total_h = (total_mins as f32) / 60.0;',
-                      '            let player_rank = if total_h >= 50.0 {',
-                      '                "Legend"',
-                      '            } else if total_h >= 25.0 {',
-                      '                "Master"',
-                      '            } else if total_h >= 10.0 {',
-                      '                "Veteran"',
-                      '            } else if total_h >= 2.0 {',
-                      '                "Explorer"',
-                      '            } else {',
-                      '                "Novice"',
-                      '            };',
-                      '',
-                      '            // Hitung jumlah mod .hnmod, .hmod & paket shader (.zip / .hshader) secara live',
-                      '            let mut hnmod_count = 0usize;',
-                      '            let mut hmod_count = 0usize;',
-                      '            if let Ok(rd) = std::fs::read_dir(self.home.join("mods")) {',
-                      '                for entry in rd.flatten() {',
-                      '                    let fname = entry.file_name().to_string_lossy().to_ascii_lowercase();',
-                      '                    if fname.ends_with(".hnmod") { hnmod_count += 1; }',
-                      '                    else if fname.ends_with(".hmod") { hmod_count += 1; }',
-                      '                }',
-                      '            }',
-                      '            let mut shader_count = 0usize;',
-                      '            if let Ok(rd) = std::fs::read_dir(self.home.join("shaderpacks")) {',
-                      '                for entry in rd.flatten() {',
-                      '                    let fname = entry.file_name().to_string_lossy().to_ascii_lowercase();',
-                      '                    if fname.ends_with(".zip") || fname.ends_with(".hshader") { shader_count += 1; }',
-                      '                }',
-                      '            }',
-                      '',
-                      '            // Left Edge Collapsible Pill ("<")',
-                      '            let pill_w = (38.0 * ui_s).clamp(30.0, 46.0);',
-                      '            let body_top = 148.0;',
-                      '            let body_h = (h - body_top - 18.0).max(190.0);',
-                      '            ui.rounded(0.0, body_top - 1.5, pill_w + 1.5, body_h + 3.0, 21.0, 0x44A8C7FA);',
-                      '            ui.rounded(0.0, body_top, pill_w, body_h, 20.0, color::RAISED);',
-                      '            ui.text(Face::Medium, (16.0 * ui_s).clamp(13.0, 20.0), pill_w * 0.34, body_top + body_h * 0.48, color::TEXT, "<");',
-                      '            self.targets.push(([0.0, body_top, pill_w, body_h], Action::Page(Page::Installed)));',
-                      '',
-                      '            // Layout geometry for Center 2x2 Bento Grid + Right Tall Profile Card (Scaled by ui_s)',
-                      '            let right_w = ((if compact { 196.0 } else { 242.0 }) * ui_s).clamp(176.0, (w * 0.35).max(200.0));',
-                      '            let right_x = (w - right_w - 16.0).max(240.0);',
-                      '            let grid_x = pill_w + 12.0;',
-                      '            let grid_w = (right_x - grid_x - 14.0).max(190.0);',
-                      '            let col_w = (grid_w - 12.0) * 0.5;',
-                      '            let grid_top = 154.0;',
-                      '            let grid_h = (h - grid_top - 18.0).max(204.0);',
-                      '            let row_h = (grid_h - 12.0) * 0.5;',
-                      '',
-                      '            // Baris Status Real-Time + Quick Controls (UI Scale, Custom BG, Shaders) di atas Bento Grid',
-                      '            let hdr_info = format!("LIVE STATS · {:02}:{:02} · UI {:.0}% · BG: {} ({})", hour_of_day, min_of_day, ui_scale_pct, bg_type.to_uppercase(), bg_media);',
-                      '            let hdr_fit = ui.fit_text(Face::Medium, (11.0 * ui_s).clamp(9.5, 13.5), &hdr_info, grid_w);',
-                      '            ui.text(Face::Medium, (11.0 * ui_s).clamp(9.5, 13.5), grid_x + 4.0, 134.0, color::MUTED, &hdr_fit);',
-                      '',
-                      '            // Card 1 (Top-Left): Real-Time Play Time (Last 7 Days) Bar Chart',
-                      '            ui.rounded(grid_x - 1.5, grid_top - 1.5, col_w + 3.0, row_h + 3.0, 23.5, 0x40A8C7FA);',
-                      '            ui.rounded(grid_x, grid_top, col_w, row_h, 22.0, color::RAISED);',
-                      '            let max_mins = (*day_minutes.iter().max().unwrap_or(&60)).max(30) as f32;',
-                      '            let step_x = (col_w - 24.0) / 7.0;',
-                      '            for idx in 0..7 {',
-                      '                let d_id = today_idx.saturating_sub((6 - idx) as u64);',
-                      '                let day_lbl = weekday_names[(d_id % 7) as usize];',
-                      '                let mins = day_minutes[idx];',
-                      '                let hrs_lbl = format!("{:.1}", (mins as f32) / 60.0).replace(\'.\', ",");',
-                      '                let ratio = ((mins as f32) / max_mins).clamp(0.08, 0.52);',
-                      '                let bx = grid_x + 12.0 + idx as f32 * step_x;',
-                      '                ui.text(Face::Regular, (9.5 * ui_s).clamp(8.5, 11.5), bx, grid_top + 10.0, if idx == 6 { color::ACCENT } else { color::TEXT }, &hrs_lbl);',
-                      '                let bar_w = (step_x - 8.0).clamp(8.0, 18.0);',
-                      '                let max_bh = (row_h * 0.50).max(16.0);',
-                      '                ui.rounded(bx + 2.0, grid_top + 26.0, bar_w, max_bh, 5.0, 0x26FFFFFF);',
-                      '                let bh = (row_h * ratio).clamp(5.0, max_bh);',
-                      '                ui.rounded(bx + 2.0, grid_top + 26.0 + (max_bh - bh), bar_w, bh, 5.0, if idx == 6 { color::ACCENT } else { 0x99A8C7FA });',
-                      '                ui.text(Face::Regular, (9.5 * ui_s).clamp(8.5, 11.5), bx, grid_top + row_h - 36.0, if idx == 6 { color::ACCENT } else { color::MUTED }, day_lbl);',
-                      '            }',
-                      '            let c1_footer = ui.fit_text(Face::Medium, (12.0 * ui_s).clamp(10.0, 14.0), "Play Time (Real-Time 7 Hari)", col_w - 24.0);',
-                      '            ui.text(Face::Medium, (12.0 * ui_s).clamp(10.0, 14.0), grid_x + 14.0, grid_top + row_h - 19.0, color::TEXT, &c1_footer);',
-                      '',
-                      '            // Card 2 (Top-Right): Pre-Baked .hnmod, .hmod & Java Shader (.zip -> WGSL) Status',
-                      '            let c2_x = grid_x + col_w + 12.0;',
-                      '            ui.rounded(c2_x - 1.5, grid_top - 1.5, col_w + 3.0, row_h + 3.0, 23.5, 0x40A8C7FA);',
-                      '            ui.rounded(c2_x, grid_top, col_w, row_h, 22.0, color::RAISED);',
-                      '            let c2_hdr = ui.fit_text(Face::Medium, (13.5 * ui_s).clamp(11.0, 16.0), "Mods (.hnmod/.hmod) & Java Shaders", col_w - 28.0);',
-                      '            ui.text(Face::Medium, (13.5 * ui_s).clamp(11.0, 16.0), c2_x + 14.0, grid_top + 12.0, color::TEXT, &c2_hdr);',
-                      '            let mod_line = ui.fit_text(Face::Medium, (12.0 * ui_s).clamp(10.0, 14.0), &format!("• Aktif: {} .hnmod (Native) & {} .hmod", hnmod_count.max(2), hmod_count.max(2)), col_w - 28.0);',
-                      '            ui.text(Face::Medium, (12.0 * ui_s).clamp(10.0, 14.0), c2_x + 14.0, grid_top + 34.0, color::ACCENT, &mod_line);',
-                      '            let sh_line = ui.fit_text(Face::Regular, (11.0 * ui_s).clamp(9.5, 13.0), &format!("• Java Shader .zip -> WGSL Bridge ({} pack)", shader_count), col_w - 28.0);',
-                      '            ui.text(Face::Regular, (11.0 * ui_s).clamp(9.5, 13.0), c2_x + 14.0, grid_top + 54.0, 0xFFFBBF24, &sh_line);',
-                      '            let bg_line = ui.fit_text(Face::Regular, (10.5 * ui_s).clamp(9.0, 12.5), "• Pre-baked Zoom, Veinminer, SmartF3, TreeFall", col_w - 28.0);',
-                      '            ui.text(Face::Regular, (10.5 * ui_s).clamp(9.0, 12.5), c2_x + 14.0, grid_top + 72.0, color::TEXT, &bg_line);',
-                      '            ui.text(Face::Medium, (11.0 * ui_s).clamp(9.5, 13.0), c2_x + 14.0, grid_top + row_h - 19.0, color::ACCENT, "Kelola Mods & Shaders →");',
-                      '            self.targets.push(([c2_x, grid_top, col_w, row_h], Action::Page(Page::Mods)));',
-                      '',
-                      '            // Card 3 (Bottom-Left): Real-Time Today\'s Statistics & UI Scale / Custom BG Quick Access',
-                      '            let r2_y = grid_top + row_h + 12.0;',
-                      '            ui.rounded(grid_x - 1.5, r2_y - 1.5, col_w + 3.0, row_h + 3.0, 23.5, 0x40A8C7FA);',
-                      '            ui.rounded(grid_x, r2_y, col_w, row_h, 22.0, color::RAISED);',
-                      '            let today_str = format!("{:.1} h", today_h).replace(\'.\', ",");',
-                      '            ui.text(Face::Medium, (24.0 * ui_s).clamp(18.0, 30.0), grid_x + 16.0, r2_y + 14.0, color::TEXT, &today_str);',
-                      '            let td_sub = ui.fit_text(Face::Regular, (11.5 * ui_s).clamp(9.5, 13.5), &format!("Hari Ini ({}) · Total {:.1} Jam", weekday_names[(today_idx % 7) as usize], total_h), col_w - 32.0);',
-                      '            ui.text(Face::Regular, (11.5 * ui_s).clamp(9.5, 13.5), grid_x + 16.0, r2_y + 44.0, color::MUTED, &td_sub);',
-                      '            let sc_sub = ui.fit_text(Face::Medium, (11.5 * ui_s).clamp(9.5, 13.5), &format!("UI Scale: {:.0}% · Custom BG Image/Video", ui_scale_pct), col_w - 32.0);',
-                      '            ui.text(Face::Medium, (11.5 * ui_s).clamp(9.5, 13.5), grid_x + 16.0, r2_y + 64.0, color::ACCENT, &sc_sub);',
-                      '            ui.text(Face::Medium, (11.0 * ui_s).clamp(9.5, 13.0), grid_x + 16.0, r2_y + row_h - 19.0, color::ACCENT, "Pilih Gambar/Video BG & Pengaturan →");',
-                      f'            self.targets.push(([grid_x, r2_y, col_w, row_h], {card3_action}));',
-                      '',
-                      '            // Card 4 (Bottom-Right): Live Engine Log + Instant Launch Status',
-                      '            ui.rounded(c2_x - 1.5, r2_y - 1.5, col_w + 3.0, row_h + 3.0, 23.5, 0x40A8C7FA);',
-                      '            ui.rounded(c2_x, r2_y, col_w, row_h, 22.0, color::RAISED);',
-                      '            ui.text(Face::Medium, (13.5 * ui_s).clamp(11.0, 16.0), c2_x + 14.0, r2_y + 12.0, color::TEXT, "Live Engine & Session Log");',
-                      '            if installing {',
-                      '                let current = InstallStage::ALL.iter().position(|s| *s == progress.stage).unwrap_or(0);',
-                      '                let st_lbl = ui.fit_text(Face::Regular, (12.0 * ui_s).clamp(10.0, 14.0), progress.stage.label(), col_w - 28.0);',
-                      '                ui.text(Face::Regular, (12.0 * ui_s).clamp(10.0, 14.0), c2_x + 14.0, r2_y + 36.0, color::TEXT, &st_lbl);',
-                      '                ui.text(Face::Regular, (11.0 * ui_s).clamp(9.5, 13.0), c2_x + 14.0, r2_y + 56.0, color::MUTED, &format!("Step {} of 6", current + 1));',
-                      '                let fraction = if progress.total > 0 { progress.done as f32 / progress.total as f32 } else { 0.0 };',
-                      '                let overall = (current as f32 + fraction.clamp(0.0, 1.0)) / 6.0;',
-                      '                ui.rounded(c2_x + 14.0, r2_y + row_h - 26.0, (col_w - 28.0) * overall.max(0.05), 6.0, 3.0, color::ACCENT);',
-                      '            } else {',
-                      '                let l1 = ui.fit_text(Face::Regular, (11.0 * ui_s).clamp(9.5, 13.0), "▷ Instant Launch: Aktif (0 ms overhead)", col_w - 28.0);',
-                      '                let l2 = ui.fit_text(Face::Regular, (11.0 * ui_s).clamp(9.5, 13.0), &format!("▷ Auth: {} · Vulka
+      - name: 8. Upload File APK Siap Install (Direct Download di Artifacts)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZalithLauncher-2-Plus-Horizon-arm64-v8a-APK
+          path: |
+            workdir/dist-apk/*.apk
+            workdir/.local/android/apk/arm64-v8a/*.apk
+          if-no-files-found: error
+          retention-days: 30
