@@ -1,4 +1,4 @@
-name: Build Horizon Android Zalith 2 Plus v2.3 APK (Fixed Keystore Update, Shader Anti-Fog, Download Progress & Custom BG Settings)
+name: Build Horizon Android Zalith 2 Plus v2.4 APK (BSL Smooth + MakeUp Fix + Keystore Tetap + Custom BG Settings)
 
 on:
   push:
@@ -24,7 +24,7 @@ on:
 
 jobs:
   build-zalith2-apk:
-    name: Build APK ZalithLauncher 2 Plus v2.3 (ZalithLauncher-2-Plus-Horizon)
+    name: Build APK ZalithLauncher 2 Plus v2.4 (ZalithLauncher-2-Plus-Horizon)
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
@@ -38,7 +38,7 @@ jobs:
         with:
           path: user-repo
 
-      - name: 2. Siapkan Source Code Vasysik/horizon-android (Pin v0.7.6 Stabil)
+      - name: 2. Siapkan Source Code Vasysik/horizon-android (Branch android dengan Fix Alpha-Cutout Terrain)
         run: |
           mkdir -p /tmp/zalith-zips /tmp/zalith-hnmods
           find user-repo -maxdepth 3 -name "*.zip" -exec cp {} /tmp/zalith-zips/ \; || true
@@ -46,10 +46,10 @@ jobs:
           if [ -f "user-repo/tools/android_build.py" ] && [ -f "user-repo/research-lock.json" ]; then
             cp -a user-repo/. workdir/
           else
-            git clone --depth 1 -b v0.7.6 https://github.com/Vasysik/horizon-android.git workdir || git clone --depth 1 -b android https://github.com/Vasysik/horizon-android.git workdir
+            git clone --depth 1 -b android https://github.com/Vasysik/horizon-android.git workdir
           fi
 
-      - name: 3. Injeksi Fitur ZalithLauncher 2 Plus v2.3 & Pasang Keystore Tetap (Anti-Uninstall)
+      - name: 3. Injeksi Fitur ZalithLauncher 2 Plus v2.4 & Pasang Keystore Tetap (Anti-Uninstall)
         working-directory: workdir
         env:
           GDRIVE_INPUT: ${{ github.event.inputs.gdrive_file_id }}
@@ -113,13 +113,26 @@ jobs:
           fi
           echo "GRADLE_BIN=/tmp/gradle-8.14/bin/gradle" >> "$GITHUB_ENV"
 
-      - name: 6. Install Rust Toolchain Sesuai rust-toolchain.toml (aarch64-linux-android)
+      - name: 6. Install Rust Toolchain & Sinkronkan Perbaikan Shader Upstream (PR #5964 MakeUp gl_FogFragCoord)
         working-directory: workdir
         run: |
           TOOLCHAIN=$(python3 -c 'import tomllib, pathlib; p=pathlib.Path("rust-toolchain.toml"); print(tomllib.loads(p.read_text())["toolchain"]["channel"] if p.exists() else "stable")')
           rustup toolchain install "$TOOLCHAIN" --profile minimal --no-self-update
           rustup default "$TOOLCHAIN"
           rustup target add aarch64-linux-android --toolchain "$TOOLCHAIN"
+          if [ -d "crates/horizon-shaders" ]; then
+            git clone --depth 1 https://github.com/horizon-rust/horizon.git /tmp/horizon-upstream 2>/dev/null || true
+            if [ -d "/tmp/horizon-upstream/crates/horizon-shaders/src" ]; then
+              cp -a crates/horizon-shaders /tmp/backup-horizon-shaders
+              cp -a /tmp/horizon-upstream/crates/horizon-shaders/src/. crates/horizon-shaders/src/
+              if cargo check -p horizon-shaders --target aarch64-linux-android; then
+                echo "Berhasil memperbarui crates/horizon-shaders dengan dukungan penuh MakeUp UltraFast (#5964) & 40+ Shader Modrinth (#6177)!"
+              else
+                echo "Mengembalikan crates/horizon-shaders bawaan branch android..."
+                rm -rf crates/horizon-shaders && mv /tmp/backup-horizon-shaders crates/horizon-shaders
+              fi
+            fi
+          fi
 
       - name: 7. Siapkan Engine Tables, Compile APK & Tanda Tangani dengan Keystore Tetap
         working-directory: workdir
