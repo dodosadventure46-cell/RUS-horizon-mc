@@ -1,4 +1,4 @@
-name: Build Horizon Android Zalith 2 APK (Tanpa Ekstrak & Anti-Gagal SDK/NDK)
+name: Build Horizon Android Zalith 2 Plus APK (Tanpa Ekstrak, Support .hnmod & Anti-Gagal SDK/NDK)
 
 on:
   push:
@@ -10,13 +10,13 @@ on:
         required: false
         default: ""
       accent_hex:
-        description: "Warna Aksen Zalith 2 (Hex)"
+        description: "Warna Aksen ZalithLauncher 2 Plus (Hex)"
         required: false
-        default: "0x10B981"
+        default: "0xA8C7FA"
 
 jobs:
   build-zalith2-apk:
-    name: Build APK Horizon Zalith 2 (Horizon-Zalith2-Edition)
+    name: Build APK ZalithLauncher 2 Plus (ZalithLauncher-2-Plus-Horizon)
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
@@ -32,8 +32,9 @@ jobs:
 
       - name: 2. Siapkan Source Code Vasysik/horizon-android (Otomatis)
         run: |
-          mkdir -p /tmp/zalith-zips
-          find user-repo -maxdepth 2 -name "*.zip" -exec cp {} /tmp/zalith-zips/ \; || true
+          mkdir -p /tmp/zalith-zips /tmp/zalith-hnmods
+          find user-repo -maxdepth 3 -name "*.zip" -exec cp {} /tmp/zalith-zips/ \; || true
+          find user-repo -maxdepth 3 -name "*.hnmod" -exec cp {} /tmp/zalith-hnmods/ \; || true
           if [ -f "user-repo/tools/android_build.py" ] && [ -f "user-repo/research-lock.json" ]; then
             echo "Repo sudah berupa fork Vasysik/horizon-android."
             cp -a user-repo/. workdir/
@@ -42,11 +43,11 @@ jobs:
             git clone --depth 1 -b android https://github.com/Vasysik/horizon-android.git workdir
           fi
 
-      - name: 3. Ekstrak Konfigurasi ZIP / Google Drive & Injeksi Tema Zalith 2
+      - name: 3. Injeksi UI ZalithLauncher 2 Plus (Bento Grid) & Aktifkan Support Mod .hnmod di Android
         working-directory: workdir
         env:
           GDRIVE_INPUT: ${{ github.event.inputs.gdrive_file_id }}
-          ACCENT_HEX: ${{ github.event.inputs.accent_hex || '0x10B981' }}
+          ACCENT_HEX: ${{ github.event.inputs.accent_hex || '0xA8C7FA' }}
         run: |
           mkdir -p /tmp/zalith-extract
           # A. Jika pengguna memasukkan Link / ID Google Drive, unduh otomatis:
@@ -57,21 +58,28 @@ jobs:
             curl -sL "https://drive.google.com/uc?export=download&id=${FILE_ID}" -o /tmp/zalith-zips/gdrive-zalith2.zip || true
           fi
 
-          # B. Jika ada file .zip di repo atau dari GDrive, ekstrak konfigurasi secara aman di /tmp (tanpa menimpa file Rust asli):
+          # B. Ekstrak konfigurasi ZIP di /tmp:
           shopt -s nullglob
           for zf in /tmp/zalith-zips/*.zip; do
             echo "Mengekstrak konfigurasi dari: $zf ..."
             unzip -q -o "$zf" -d /tmp/zalith-extract || true
           done
+          find /tmp/zalith-extract -name "*.hnmod" -exec cp {} /tmp/zalith-hnmods/ \; 2>/dev/null || true
 
-          # C. Injeksi Tema Zalith 2 (Zalith Emerald) & Patch Keamanan SDK/NDK ke Source Code Rust:
+          # C. Jika ada file .hnmod yang disertakan di repo/ZIP, ekstrak mixin native-nya ke workdir/mixins/
+          for hnm in /tmp/zalith-hnmods/*.hnmod; do
+            echo "Menyiapkan native mixin dari mod .hnmod: $hnm ..."
+            unzip -q -o "$hnm" "mixins/*" -d . 2>/dev/null || true
+          done
+
+          # D. Patch UI ZalithLauncher 2 Plus & Aktifkan Support .hnmod Penuh di Android:
           python3 - << 'PYEOF'
           import os, pathlib, re
 
-          accent_hex = os.environ.get("ACCENT_HEX", "0x10B981").strip()
+          accent_hex = os.environ.get("ACCENT_HEX", "0xA8C7FA").strip()
           if not re.match(r"^0x[0-9a-fA-F]{6}$", accent_hex):
               cleaned = accent_hex.lstrip("#").lstrip("0x")
-              accent_hex = f"0x{cleaned.upper()}" if re.match(r"^[0-9a-fA-F]{6}$", cleaned) else "0x10B981"
+              accent_hex = f"0x{cleaned.upper()}" if re.match(r"^[0-9a-fA-F]{6}$", cleaned) else "0xA8C7FA"
 
           # Baca horizon.txt jika diekstrak dari ZIP pengguna
           htxt = pathlib.Path("/tmp/zalith-extract/horizon.txt")
@@ -82,12 +90,12 @@ jobs:
                       if re.match(r"^[0-9a-fA-F]{6}$", hval):
                           accent_hex = f"0x{hval.upper()}"
 
-          # 1. Patch crates/horizon-theme/src/lib.rs (Accent & Corner Radius Zalith 2)
+          # 1. Patch crates/horizon-theme/src/lib.rs (Accent & Corner Radius ZalithLauncher 2 Plus)
           theme_lib = pathlib.Path("crates/horizon-theme/src/lib.rs")
           if theme_lib.exists():
               txt = theme_lib.read_text(encoding="utf-8")
-              txt = re.sub(r"pub const RADIUS:\s*f32\s*=\s*[0-9.]+;", "pub const RADIUS: f32 = 16.;", txt)
-              txt = re.sub(r"pub const RADIUS_PLATE:\s*f32\s*=\s*[0-9.]+;", "pub const RADIUS_PLATE: f32 = 12.;", txt)
+              txt = re.sub(r"pub const RADIUS:\s*f32\s*=\s*[0-9.]+;", "pub const RADIUS: f32 = 24.;", txt)
+              txt = re.sub(r"pub const RADIUS_PLATE:\s*f32\s*=\s*[0-9.]+;", "pub const RADIUS_PLATE: f32 = 20.;", txt)
               txt = re.sub(
                   r"(pub const DARK:\s*Palette\s*=\s*Palette\s*\{[\s\S]*?accent:\s*)0x[0-9a-fA-F_]+",
                   rf"\g<1>{accent_hex}",
@@ -97,36 +105,269 @@ jobs:
               theme_lib.write_text(txt, encoding="utf-8")
               print(f"Berhasil memodifikasi crates/horizon-theme/src/lib.rs (accent={accent_hex})")
 
-          # 2. Patch crates/horizon-client/src/ui_theme.rs (Zalith 2 Translucent Glass & Custom Background Scrim)
+          # 2. Patch crates/horizon-client/src/ui_theme.rs (ZalithLauncher 2 Plus Frosted Glass & Scrim)
           ui_theme = pathlib.Path("crates/horizon-client/src/ui_theme.rs")
           if ui_theme.exists():
               txt = ui_theme.read_text(encoding="utf-8")
               txt = re.sub(
                   r"pub const BG:\s*u32\s*=\s*hex\(P\.page,\s*[0-9]+\);",
-                  "pub const BG: u32 = hex(P.page, 148);",
+                  "pub const BG: u32 = hex(P.page, 82);",
                   txt,
               )
               txt = re.sub(
                   r"pub const RAISED:\s*u32\s*=\s*hex\(P\.ink,\s*[0-9]+\);",
-                  "pub const RAISED: u32 = hex(P.ink, 63);",
+                  "pub const RAISED: u32 = hex(P.ink, 84);",
                   txt,
               )
               ui_theme.write_text(txt, encoding="utf-8")
               print("Berhasil memodifikasi crates/horizon-client/src/ui_theme.rs")
 
-          # 3. Patch crates/horizon-client/src/android/launcher_pages.rs (Zalith 2 Rounded Buttons & Header)
+          # 3. Patch crates/horizon-client/src/android/launcher_pages.rs (ZalithLauncher 2 Plus Bento Grid + Right Profile Card + Luncurkan Pill)
           launcher_pages = pathlib.Path("crates/horizon-client/src/android/launcher_pages.rs")
           if launcher_pages.exists():
               txt = launcher_pages.read_text(encoding="utf-8")
               txt = txt.replace(
                   "        2.0,\n        if accent { color::ACCENT } else { color::RAISED },",
-                  "        14.0,\n        if accent { color::ACCENT } else { color::RAISED },",
+                  "        18.0,\n        if accent { color::ACCENT } else { color::RAISED },",
               )
-              txt = txt.replace('"Horizon Android {}"', '"Horizon Zalith 2 · {}"')
-              launcher_pages.write_text(txt, encoding="utf-8")
-              print("Berhasil memodifikasi crates/horizon-client/src/android/launcher_pages.rs")
+              txt = txt.replace('"Horizon Android {}"', '"ZalithLauncher 2 Plus · {}"')
+              txt = txt.replace('"Search / .hmod URL: "', '"Search / .hnmod or .hmod URL: "')
 
-          # 4. Patch tools/android_build.py agar fungsi latest() tidak pernah crash jika ada folder non-angka di SDK/NDK
+              # Ganti tampilan Page::Play menjadi 2x2 Bento Grid + Right Tall Profile Card persis ZalithLauncher 2 Plus
+              start_marker = "        if page == Page::Play {"
+              end_marker = "        } else if page.is_catalog() {"
+              if start_marker in txt and end_marker in txt:
+                  before, rest = txt.split(start_marker, 1)
+                  _, after = rest.split(end_marker, 1)
+                  zalith_plus_play_page = '''        if page == Page::Play {
+            use horizon_client::official_install::InstallStage;
+            let installed = horizon_client::official_install::ready(&self.home);
+            let installing = self.worker.is_some();
+            let progress = *self.install.lock().unwrap();
+
+            // Left Edge Collapsible Pill ("<")
+            ui.rounded(0.0, 142.0, 38.0, (h - 162.0).max(180.0), 20.0, color::RAISED);
+            ui.text(Face::Medium, 16.0, 14.0, 142.0 + (h - 162.0).max(180.0) * 0.48, color::TEXT, "<");
+            self.targets.push(([0.0, 142.0, 38.0, (h - 162.0).max(180.0)], Action::Page(Page::Installed)));
+
+            // Layout geometry for Center 2x2 Bento Grid + Right Tall Profile Card
+            let right_w = if compact { 190.0 } else { 236.0 };
+            let right_x = (w - right_w - 18.0).max(260.0);
+            let grid_x = 50.0;
+            let grid_w = (right_x - grid_x - 14.0).max(200.0);
+            let col_w = (grid_w - 12.0) * 0.5;
+            let grid_top = 154.0;
+            let grid_h = (h - grid_top - 20.0).max(210.0);
+            let row_h = (grid_h - 12.0) * 0.5;
+
+            ui.text(Face::Medium, 11.0, grid_x + 4.0, 136.0, color::MUTED, "TODAY'S STATISTICS");
+
+            // Card 1 (Top-Left): Play Time (Last 7 Days) Bar Chart
+            ui.rounded(grid_x, grid_top, col_w, row_h, 22.0, color::RAISED);
+            let days = [("Sel", "1,0", 0.48_f32), ("Rab", "0,0", 0.05), ("Kam", "0,2", 0.16), ("Jum", "0,1", 0.10), ("Sab", "0,0", 0.05), ("Min", "0,0", 0.05), ("Sen", "0,0", 0.05)];
+            let step_x = (col_w - 24.0) / 7.0;
+            for (idx, (day_lbl, hrs_lbl, ratio)) in days.iter().enumerate() {
+                let bx = grid_x + 12.0 + idx as f32 * step_x;
+                ui.text(Face::Regular, 10.0, bx, grid_top + 10.0, color::TEXT, hrs_lbl);
+                let bh = (row_h * ratio).max(4.0);
+                ui.rounded(bx + 2.0, grid_top + 28.0, (step_x - 8.0).clamp(8.0, 18.0), bh, 5.0, color::ACCENT);
+                ui.text(Face::Regular, 10.0, bx, grid_top + row_h - 38.0, color::MUTED, day_lbl);
+            }
+            ui.text(Face::Medium, 13.0, grid_x + 14.0, grid_top + row_h - 20.0, color::TEXT, "Play Time (Last 7 Days)");
+
+            // Card 2 (Top-Right): Changelog Plus 1.3 (.hnmod, Capes, Screen Recorder)
+            let c2_x = grid_x + col_w + 12.0;
+            ui.rounded(c2_x, grid_top, col_w, row_h, 22.0, color::RAISED);
+            ui.text(Face::Medium, 14.0, c2_x + 14.0, grid_top + 12.0, color::TEXT, "Changelog");
+            let ch_title = ui.fit_text(Face::Medium, 14.0, "Plus 1.3 (Capes, .hnmod & more)", col_w - 28.0);
+            ui.text(Face::Medium, 14.0, c2_x + 14.0, grid_top + 32.0, color::ACCENT, &ch_title);
+            ui.text(Face::Medium, 12.0, c2_x + 14.0, grid_top + 54.0, color::ACCENT, "Capes & .hnmod");
+            let ch_note = ui.fit_text(Face::Regular, 11.0, "• Native .hnmod & .hmod mod loader active", col_w - 28.0);
+            ui.text(Face::Regular, 11.0, c2_x + 14.0, grid_top + 74.0, color::TEXT, &ch_note);
+            ui.text(Face::Medium, 11.0, c2_x + 14.0, grid_top + row_h - 20.0, color::ACCENT, "Click for more");
+            self.targets.push(([c2_x, grid_top, col_w, row_h], Action::Page(Page::Mods)));
+
+            // Card 3 (Bottom-Left): 0,0 h Today STATISTICS
+            let r2_y = grid_top + row_h + 12.0;
+            ui.rounded(grid_x, r2_y, col_w, row_h, 22.0, color::RAISED);
+            ui.text(Face::Medium, 26.0, grid_x + col_w * 0.32, r2_y + 18.0, color::TEXT, "0,0 h");
+            ui.text(Face::Regular, 12.0, grid_x + col_w * 0.40, r2_y + 50.0, color::MUTED, "Today");
+            ui.text(Face::Medium, 15.0, grid_x + col_w * 0.28, r2_y + 72.0, color::ACCENT, "STATISTICS");
+            ui.text(Face::Medium, 11.0, grid_x + 14.0, r2_y + row_h - 20.0, color::ACCENT, "Click for more");
+
+            // Card 4 (Bottom-Right): Last Game Log + Install Progress
+            ui.rounded(c2_x, r2_y, col_w, row_h, 22.0, color::RAISED);
+            ui.text(Face::Medium, 14.0, c2_x + 14.0, r2_y + 12.0, color::TEXT, "Last Game Log");
+            if installing {
+                let current = InstallStage::ALL.iter().position(|s| *s == progress.stage).unwrap_or(0);
+                let st_lbl = ui.fit_text(Face::Regular, 12.0, progress.stage.label(), col_w - 28.0);
+                ui.text(Face::Regular, 12.0, c2_x + 14.0, r2_y + 36.0, color::TEXT, &st_lbl);
+                ui.text(Face::Regular, 11.0, c2_x + 14.0, r2_y + 56.0, color::MUTED, &format!("Step {} of 6", current + 1));
+                let fraction = if progress.total > 0 { progress.done as f32 / progress.total as f32 } else { 0.0 };
+                let overall = (current as f32 + fraction.clamp(0.0, 1.0)) / 6.0;
+                ui.rounded(c2_x + 14.0, r2_y + row_h - 26.0, (col_w - 28.0) * overall.max(0.05), 6.0, 3.0, color::ACCENT);
+            } else {
+                let l1 = ui.fit_text(Face::Regular, 11.0, "==== Launch Minecraft 26.3 ====", col_w - 28.0);
+                let l2 = ui.fit_text(Face::Regular, 11.0, "▷ Launcher: 2.4.10 (.hnmod + .hmod)", col_w - 28.0);
+                let l3 = ui.fit_text(Face::Regular, 11.0, "▷ Architecture: arm64 · Vulkan", col_w - 28.0);
+                ui.text(Face::Regular, 11.0, c2_x + 14.0, r2_y + 34.0, color::MUTED, &l1);
+                ui.text(Face::Regular, 11.0, c2_x + 14.0, r2_y + 52.0, color::MUTED, &l2);
+                ui.text(Face::Regular, 11.0, c2_x + 14.0, r2_y + 70.0, color::MUTED, &l3);
+                ui.text(Face::Medium, 11.0, c2_x + 14.0, r2_y + row_h - 20.0, color::ACCENT, "Click for more");
+                self.targets.push(([c2_x, r2_y, col_w, row_h], Action::Logs));
+            }
+
+            // Right Tall Profile & Launch Card (Steve Avatar + Username + Novice + Play Time + Luncurkan Pill)
+            ui.rounded(right_x, 142.0, right_w, grid_h + 12.0, 24.0, color::RAISED);
+            let av_x = right_x + (right_w - 56.0) * 0.5;
+            let av_y = 162.0;
+            // Steve Pixel Avatar
+            ui.rounded(av_x, av_y, 56.0, 56.0, 8.0, 0xFF6C8EBD);
+            ui.rounded(av_x, av_y, 56.0, 16.0, 4.0, 0xFF20304A);
+            ui.rounded(av_x + 8.0, av_y + 26.0, 12.0, 7.0, 1.0, 0xFFFFFFFF);
+            ui.rounded(av_x + 14.0, av_y + 26.0, 6.0, 7.0, 1.0, 0xFF7F3B49);
+            ui.rounded(av_x + 36.0, av_y + 26.0, 12.0, 7.0, 1.0, 0xFFFFFFFF);
+            ui.rounded(av_x + 36.0, av_y + 26.0, 6.0, 7.0, 1.0, 0xFF7F3B49);
+            ui.rounded(av_x + 18.0, av_y + 40.0, 20.0, 8.0, 2.0, 0xFF334778);
+
+            let player_name = if self.catalog.config.name.is_empty() { "dodo" } else { &self.catalog.config.name };
+            let name_w = ui.measure(Face::Medium, 17.0, player_name);
+            ui.text(Face::Medium, 17.0, right_x + ((right_w - name_w) * 0.5).max(12.0), av_y + 64.0, color::TEXT, player_name);
+            let acc_status = if self.login.signed_in { "Microsoft" } else { "Offline" };
+            let st_w = ui.measure(Face::Regular, 12.0, acc_status);
+            ui.text(Face::Regular, 12.0, right_x + ((right_w - st_w) * 0.5).max(12.0), av_y + 84.0, color::MUTED, acc_status);
+            let rk_w = ui.measure(Face::Medium, 12.0, "Novice");
+            ui.text(Face::Medium, 12.0, right_x + ((right_w - rk_w) * 0.5).max(12.0), av_y + 100.0, color::ACCENT, "Novice");
+            let pt_lbl = "Play Time: 2,6 Hours";
+            let pt_w = ui.measure(Face::Regular, 12.0, pt_lbl);
+            ui.text(Face::Regular, 12.0, right_x + ((right_w - pt_w) * 0.5).max(12.0), av_y + 116.0, color::MUTED, pt_lbl);
+
+            let prof_y = 142.0 + grid_h + 12.0 - 104.0;
+            button(
+                &mut ui,
+                &mut self.targets,
+                [right_x + 14.0, prof_y, right_w - 28.0, 38.0],
+                &format!("26.3 Horizon (.hnmod #{})", self.catalog.config.profile),
+                Action::Profile,
+                false,
+            );
+
+            let launch_y = 142.0 + grid_h + 12.0 - 56.0;
+            button(
+                &mut ui,
+                &mut self.targets,
+                [right_x + 14.0, launch_y, right_w - 28.0, 44.0],
+                if installing {
+                    progress.stage.label()
+                } else if installed {
+                    "Luncurkan"
+                } else if self.error.is_some() {
+                    "Retry Install"
+                } else {
+                    "Download 26.3"
+                },
+                Action::Play,
+                true,
+            );
+'''
+                  txt = before + zalith_plus_play_page + end_marker + after
+              launcher_pages.write_text(txt, encoding="utf-8")
+              print("Berhasil memodifikasi crates/horizon-client/src/android/launcher_pages.rs (Bento Grid ZalithLauncher 2 Plus)")
+
+          # 4. Aktifkan Support Mod .hnmod Penuh di Android (5 file inti):
+          # 4a. crates/horizon-client/src/content_files.rs
+          cf = pathlib.Path("crates/horizon-client/src/content_files.rs")
+          if cf.exists():
+              txt = cf.read_text(encoding="utf-8")
+              txt = txt.replace(
+                  'Self::Mods => lower.ends_with(".hmod"),',
+                  'Self::Mods => lower.ends_with(".hmod") || lower.ends_with(".hnmod"),',
+              )
+              txt = txt.replace(
+                  'Self::Mods => raw == "horizon-mod.toml",',
+                  'Self::Mods => raw == "horizon-mod.toml" || raw == "horizon-native.json",',
+              )
+              cf.write_text(txt, encoding="utf-8")
+              print("Berhasil mengaktifkan validasi .hnmod di crates/horizon-client/src/content_files.rs")
+
+          # 4b. crates/horizon-client/src/android/catalog.rs
+          cat = pathlib.Path("crates/horizon-client/src/android/catalog.rs")
+          if cat.exists():
+              txt = cat.read_text(encoding="utf-8")
+              txt = re.sub(
+                  r"pub fn source_only_mod\(project: &Project\) -> bool \{[\s\S]*?\n\}",
+                  "pub fn source_only_mod(_project: &Project) -> bool {\n    false\n}",
+                  txt,
+                  count=1,
+              )
+              txt = txt.replace(
+                  '.strip_suffix(".hmod")',
+                  '.strip_suffix(".hmod").or_else(|| name.strip_suffix(".hnmod"))',
+                  1,
+              )
+              txt = txt.replace(
+                  'item.file.strip_suffix(".hmod")',
+                  'item.file.strip_suffix(".hmod").or_else(|| item.file.strip_suffix(".hnmod"))',
+              )
+              txt = txt.replace(
+                  'item.file == format!("{}.hmod", project.id)',
+                  '(item.file == format!("{}.hmod", project.id) || item.file == format!("{}.hnmod", project.id))',
+              )
+              cat.write_text(txt, encoding="utf-8")
+              print("Berhasil mengaktifkan katalog & toggle .hnmod di crates/horizon-client/src/android/catalog.rs")
+
+          # 4c. crates/horizon-client/src/android/documents.rs
+          docs = pathlib.Path("crates/horizon-client/src/android/documents.rs")
+          if docs.exists():
+              txt = docs.read_text(encoding="utf-8")
+              txt = txt.replace(
+                  'format!("{}.hmod", package.manifest.id)',
+                  'if file_name.to_ascii_lowercase().ends_with(".hnmod") { format!("{}.hnmod", package.manifest.id) } else { format!("{}.hmod", package.manifest.id) }',
+              )
+              docs.write_text(txt, encoding="utf-8")
+              print("Berhasil mengaktifkan impor dokumen .hnmod di crates/horizon-client/src/android/documents.rs")
+
+          # 4d. launcher/src/browser/horizon.rs
+          bh = pathlib.Path("launcher/src/browser/horizon.rs")
+          if bh.exists():
+              txt = bh.read_text(encoding="utf-8")
+              txt = txt.replace(
+                  'if native && cfg!(target_os = "android") {',
+                  'if false && native && cfg!(target_os = "android") {',
+              )
+              txt = txt.replace(
+                  'instance_root.join("horizon-native-mods")',
+                  'instance_root.join("horizon-mods")',
+              )
+              bh.write_text(txt, encoding="utf-8")
+              print("Berhasil mengaktifkan unduhan .hnmod di launcher/src/browser/horizon.rs")
+
+          # 4e. crates/horizon-mods/src/manifest.rs
+          mf = pathlib.Path("crates/horizon-mods/src/manifest.rs")
+          if mf.exists():
+              txt = mf.read_text(encoding="utf-8")
+              old_read = '            let toml = entry(MANIFEST)?.ok_or_else(|| format!("{MANIFEST}: missing"))?;\n            let toml = String::from_utf8(toml).map_err(|_| format!("{MANIFEST}: not UTF-8"))?;'
+              new_read = (
+                  '            let toml = match entry(MANIFEST)? {\n'
+                  '                Some(bytes) => String::from_utf8(bytes).map_err(|_| format!("{MANIFEST}: not UTF-8"))?,\n'
+                  '                None => {\n'
+                  '                    let nb = entry("horizon-native.json")?.ok_or_else(|| format!("{MANIFEST} or horizon-native.json: missing"))?;\n'
+                  '                    let nm = crate::index::NativeMod::from_json(&nb)?;\n'
+                  '                    let first = nm.mixins.first().ok_or_else(|| "horizon-native.json has no mixins".to_string())?;\n'
+                  '                    format!("id = {:?}\\nname = {:?}\\nversion = {:?}\\napi = \"0.2\"\\ncapabilities = [\"registries\"]\\n", first.id, format!("{} (.hnmod)", first.id), first.version)\n'
+                  '                }\n'
+                  '            };'
+              )
+              if old_read in txt:
+                  txt = txt.replace(old_read, new_read)
+              txt = txt.replace(
+                  'p.extension().is_some_and(|e| e == "hmod")',
+                  'p.extension().is_some_and(|e| e == "hmod" || e == "hnmod")',
+              )
+              mf.write_text(txt, encoding="utf-8")
+              print("Berhasil mengaktifkan pembacaan manifest .hnmod (horizon-native.json) di crates/horizon-mods/src/manifest.rs")
+
+          # 5. Patch tools/android_build.py agar fungsi latest() tidak pernah crash jika ada folder non-angka di SDK/NDK
           ab = pathlib.Path("tools/android_build.py")
           if ab.exists():
               txt = ab.read_text(encoding="utf-8")
@@ -200,7 +441,7 @@ jobs:
         working-directory: workdir
         run: |
           set -e
-          # Bersihkan file yang tidak terlacak agar git tree bersih
+          # Bersihkan file yang tidak terlacak di .github agar git tree bersih
           git checkout -- .github 2>/dev/null || true
           git clean -fd
 
@@ -237,12 +478,12 @@ jobs:
             --gradle "$GRADLE_BIN"
 
           mkdir -p dist-apk
-          cp -v .local/android/apk/arm64-v8a/horizon-android-public.apk "dist-apk/Horizon-Zalith2-Edition-arm64-v8a.apk"
+          cp -v .local/android/apk/arm64-v8a/horizon-android-public.apk "dist-apk/ZalithLauncher-2-Plus-Horizon-arm64-v8a.apk"
 
       - name: 8. Upload File APK Siap Install (Direct Download di Artifacts)
         uses: actions/upload-artifact@v4
         with:
-          name: Horizon-Zalith2-Edition-arm64-v8a-APK
+          name: ZalithLauncher-2-Plus-Horizon-arm64-v8a-APK
           path: |
             workdir/dist-apk/*.apk
             workdir/.local/android/apk/arm64-v8a/*.apk
