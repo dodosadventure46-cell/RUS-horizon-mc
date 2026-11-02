@@ -1,0 +1,129 @@
+name: Build Horizon Android Zalith 2 APK (Tanpa Ekstrak)
+
+on:
+  push:
+    branches: [ "android", "main", "master" ]
+  workflow_dispatch:
+    inputs:
+      gdrive_file_id:
+        description: "(Opsional) ID File / Link Google Drive ZIP jika tidak upload ZIP ke repo"
+        required: false
+        default: ""
+      accent_hex:
+        description: "Warna Aksen Zalith 2 (Hex)"
+        required: false
+        default: "0x10B981"
+
+jobs:
+  build-zalith2-apk:
+    name: Build APK Horizon Zalith 2 (Horizon-Zalith2-Edition)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: 1. Checkout Repository Pengguna
+        uses: actions/checkout@v4
+        with:
+          path: user-repo
+
+      - name: 2. Siapkan Source Code Vasysik/horizon-android (Otomatis)
+        run: |
+          if [ -f "user-repo/tools/android_build.py" ]; then
+            echo "Repo sudah berupa fork Vasysik/horizon-android."
+            cp -r user-repo/. workdir/
+          else
+            echo "Mengambil source code terbaru dari Vasysik/horizon-android (branch android)..."
+            git clone --depth 1 -b android https://github.com/Vasysik/horizon-android.git workdir
+            # Salin file .zip jika pengguna mengunggah file .zip mentah ke repo (tanpa ekstrak)
+            find user-repo -maxdepth 2 -name "*.zip" -exec cp {} workdir/ \;
+          fi
+
+      - name: 3. Otomatis Ekstrak ZIP / Download dari Google Drive / Injeksi Tema Zalith 2
+        working-directory: workdir
+        env:
+          GDRIVE_INPUT: ${{ github.event.inputs.gdrive_file_id }}
+          ACCENT_HEX: ${{ github.event.inputs.accent_hex || '0x10B981' }}
+        run: |
+          # A. Jika pengguna memasukkan Link / ID Google Drive, unduh otomatis di server GitHub:
+          if [ -n "$GDRIVE_INPUT" ]; then
+            FILE_ID=$(echo "$GDRIVE_INPUT" | sed -n 's/.*[-/]\([0-9A-Za-z_-]\{25,\}\).*/\1/p')
+            if [ -z "$FILE_ID" ]; then FILE_ID="$GDRIVE_INPUT"; fi
+            echo "Mengunduh paket ZIP dari Google Drive ID: $FILE_ID ..."
+            curl -L "https://drive.google.com/uc?export=download&id=${FILE_ID}" -o gdrive-zalith2.zip || true
+          fi
+
+          # B. Jika ada file .zip mentah di dalam repo (tanpa perlu ekstrak manual di HP), ekstrak otomatis:
+          shopt -s nullglob
+          ZIP_FILES=(*.zip)
+          if [ ${#ZIP_FILES[@]} -gt 0 ]; then
+            for zf in "${ZIP_FILES[@]}"; do
+              echo "Menemukan file ZIP mentah: $zf -> Mengekstrak otomatis di server..."
+              unzip -o "$zf" -d . || true
+              rm -f "$zf"
+            done
+          fi
+
+          # C. Injeksi Langsung Tema Zalith 2 (Zalith Emerald) ke Source Code Rust:
+          python3 - << 'PYEOF'
+          import os, pathlib, re
+
+          accent_hex = os.environ.get("ACCENT_HEX", "0x10B981")
+          on_accent_hex = "0x052E16"
+
+          # 1. Patch crates/horizon-theme/src/lib.rs (Accent & Corner Radius Zalith 2)
+          theme_lib = pathlib.Path("crates/horizon-theme/src/lib.rs")
+          if theme_lib.exists():
+              txt = theme_lib.read_text(encoding="utf-8")
+              txt = re.sub(r"pub const RADIUS:s*f32s*=s*[0-9.]+;", "pub const RADIUS: f32 = 16.0;", txt)
+              txt = re.sub(r"pub const RADIUS_PLATE:s*f32s*=s*[0-9.]+;", "pub const RADIUS_PLATE: f32 = 12.0;", txt)
+              txt = re.sub(r"accent:s*0x[0-9A-Fa-f_]+", f"accent: {accent_hex}", txt)
+              theme_lib.write_text(txt, encoding="utf-8")
+              print("Berhasil memodifikasi crates/horizon-theme/src/lib.rs")
+
+          # 2. Patch crates/horizon-client/src/ui_theme.rs (Zalith 2 Translucent Glass & Custom Background Scrim)
+          ui_theme = pathlib.Path("crates/horizon-client/src/ui_theme.rs")
+          if ui_theme.exists():
+              txt = ui_theme.read_text(encoding="utf-8")
+              txt = re.sub(
+                  r"pub const BG:s*u32s*=s*hex(P.page,s*255);",
+                  "pub const BG: u32 = hex(P.page, 148);",
+                  txt,
+              )
+              txt = re.sub(
+                  r"pub const RAISED:s*u32s*=s*hex(P.ink,s*[0-9]+);",
+                  "pub const RAISED: u32 = hex(P.ink, 63);",
+                  txt,
+              )
+              ui_theme.write_text(txt, encoding="utf-8")
+              print("Berhasil memodifikasi crates/horizon-client/src/ui_theme.rs")
+          PYEOF
+
+      - name: 4. Set up Python 3.12 & JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: 5. Set up Android SDK & NDK
+        uses: android-actions/setup-android@v3
+
+      - name: 6. Install Rust Toolchain (aarch64-linux-android)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: 7. Compile Native Rust Engine & Build APK (arm64-v8a)
+        working-directory: workdir
+        run: |
+          # Bersihkan file sementara sebelum audit public tree
+          rm -rf user-repo *.zip gdrive-zalith2.zip
+          git checkout -- .github 2>/dev/null || true
+          python3 tools/android_build.py --abi arm64-v8a --public
+
+      - name: 8. Upload File APK Siap Install (Direct Download di Artifacts)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Horizon-Zalith2-Edition-arm64-v8a-APK
+          path: |
+            workdir/**/*.apk
+          retention-days: 30
