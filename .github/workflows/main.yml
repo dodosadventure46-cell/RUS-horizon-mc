@@ -1,4 +1,4 @@
-name: Build Horizon Android Zalith 2 Plus v2.2 APK (Anti-Truncate & Zero PYEOF)
+name: Build Horizon Android Zalith 2 Plus v2.3 APK (Fixed Keystore Update, Shader Anti-Fog, Download Progress & Custom BG Settings)
 
 on:
   push:
@@ -24,7 +24,7 @@ on:
 
 jobs:
   build-zalith2-apk:
-    name: Build APK ZalithLauncher 2 Plus v2.2 (ZalithLauncher-2-Plus-Horizon)
+    name: Build APK ZalithLauncher 2 Plus v2.3 (ZalithLauncher-2-Plus-Horizon)
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
@@ -38,7 +38,7 @@ jobs:
         with:
           path: user-repo
 
-      - name: 2. Siapkan Source Code Vasysik/horizon-android (Otomatis)
+      - name: 2. Siapkan Source Code Vasysik/horizon-android (Pin v0.7.6 Stabil)
         run: |
           mkdir -p /tmp/zalith-zips /tmp/zalith-hnmods
           find user-repo -maxdepth 3 -name "*.zip" -exec cp {} /tmp/zalith-zips/ \; || true
@@ -46,10 +46,10 @@ jobs:
           if [ -f "user-repo/tools/android_build.py" ] && [ -f "user-repo/research-lock.json" ]; then
             cp -a user-repo/. workdir/
           else
-            git clone --depth 1 -b android https://github.com/Vasysik/horizon-android.git workdir
+            git clone --depth 1 -b v0.7.6 https://github.com/Vasysik/horizon-android.git workdir || git clone --depth 1 -b android https://github.com/Vasysik/horizon-android.git workdir
           fi
 
-      - name: 3. Injeksi 7 Fitur ZalithLauncher 2 Plus v2.2 dari Paket ZIP
+      - name: 3. Injeksi Fitur ZalithLauncher 2 Plus v2.3 & Pasang Keystore Tetap (Anti-Uninstall)
         working-directory: workdir
         env:
           GDRIVE_INPUT: ${{ github.event.inputs.gdrive_file_id }}
@@ -57,7 +57,7 @@ jobs:
           DEFAULT_UI_SCALE: ${{ github.event.inputs.ui_scale_pct || '100' }}
           DEFAULT_ELY_USER: ${{ github.event.inputs.ely_default_user || 'dodo' }}
         run: |
-          mkdir -p /tmp/zalith-extract mixins
+          mkdir -p /tmp/zalith-extract mixins ~/.android .local/android
           if [ -n "$GDRIVE_INPUT" ]; then
             FILE_ID=$(echo "$GDRIVE_INPUT" | sed -n 's/.*[-/]\([0-9A-Za-z_-]\{25,\}\).*/\1/p')
             if [ -z "$FILE_ID" ]; then FILE_ID="$GDRIVE_INPUT"; fi
@@ -68,6 +68,11 @@ jobs:
             echo "Mengekstrak konfigurasi dari: $zf ..."
             unzip -q -o "$zf" -d /tmp/zalith-extract || true
           done
+          if [ -f "/tmp/zalith-extract/zalith2-fixed.keystore" ]; then
+            cp -f /tmp/zalith-extract/zalith2-fixed.keystore ~/.android/debug.keystore
+            cp -f /tmp/zalith-extract/zalith2-fixed.keystore .local/android/debug.keystore
+            echo "Keystore tetap berhasil dipasang (Update APK ke depannya tidak perlu uninstall!)."
+          fi
           find /tmp/zalith-extract -name "*.hnmod" -exec cp {} /tmp/zalith-hnmods/ \; 2>/dev/null || true
           for hnm in /tmp/zalith-hnmods/*.hnmod; do
             unzip -q -o "$hnm" "mixins/*" -d . 2>/dev/null || true
@@ -116,14 +121,23 @@ jobs:
           rustup default "$TOOLCHAIN"
           rustup target add aarch64-linux-android --toolchain "$TOOLCHAIN"
 
-      - name: 7. Siapkan Engine Tables (Instant Launch) & Compile APK (arm64-v8a)
+      - name: 7. Siapkan Engine Tables, Compile APK & Tanda Tangani dengan Keystore Tetap
         working-directory: workdir
         run: |
           set -e
           git checkout -- .github 2>/dev/null || true
-          git clean -fd -e mixins || true
+          git clean -fd -e mixins -e .local || true
+          mkdir -p ~/.android .local/android
+          if [ -f "/tmp/zalith-extract/zalith2-fixed.keystore" ]; then
+            cp -f /tmp/zalith-extract/zalith2-fixed.keystore ~/.android/debug.keystore
+            cp -f /tmp/zalith-extract/zalith2-fixed.keystore .local/android/debug.keystore
+          fi
           python3 -c 'import json,pathlib,urllib.request,zipfile; r=pathlib.Path("."); v=json.loads((r/"research-lock.json").read_text())["minecraft"]["version"]; d=r/".local/horizon-client"/v; d.mkdir(parents=True,exist_ok=True); urllib.request.urlretrieve("https://github.com/Vasysik/horizon-android/releases/download/v0.7.6/Horizon-Android-0.7.6-arm64-v8a.apk","/tmp/ref.apk"); zipfile.ZipFile(zipfile.ZipFile("/tmp/ref.apk").open("assets/engine-data.zip")).extractall(d); print("Engine tables ready:",d)' || python3 tools/android_prepare.py
           python3 tools/android_build.py --abi arm64-v8a --public --sdk "$ANDROID_HOME" --java-home "$JAVA_HOME" --gradle "$GRADLE_BIN"
+          if [ -f "/tmp/zalith-extract/zalith2-fixed.keystore" ] && [ -x "$ANDROID_HOME/build-tools/35.0.0/apksigner" ]; then
+            "$ANDROID_HOME/build-tools/35.0.0/apksigner" sign --ks /tmp/zalith-extract/zalith2-fixed.keystore --ks-key-alias androiddebugkey --ks-pass pass:android --key-pass pass:android .local/android/apk/arm64-v8a/horizon-android-public.apk
+            echo "APK berhasil ditandatangani dengan Keystore Tetap (zalith2-fixed.keystore)!"
+          fi
           mkdir -p dist-apk
           cp -v .local/android/apk/arm64-v8a/horizon-android-public.apk "dist-apk/ZalithLauncher-2-Plus-Horizon-arm64-v8a.apk"
 
